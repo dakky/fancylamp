@@ -1,190 +1,61 @@
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
-#include <PubSubClient.h>
 #include <EasyButton.h>
-#include <secret.h>
+#define FASTLED_INTERRUPT_RETRY_COUNT 1
+#include <FastLED.h>
+#include <LedProfiles.h>
+#include <functionsOTA.h>
+#include <functionsWLAN.h>
+#include <config.h>
 
-const char *ssid = "firebird";
+// dynamic functioncalls
+// LedProfiles[]: List of used profiles
+// ledProfilesCount: c-style: arrays start at 0 => count -1
+typedef void (*profile)();
+profile LedProfiles[] = {simpleColor, testProfile2, testProfile3};
+int ledProfilesCount = 2;
+int colorProfile = 0;
 
-const char *hostname = "fancylamp";
-const char *mqtt_server = "autohome.intern.dakkar.eu";
-const int   mqtt_server_port = 1883;
-
-const char *subTopicLight = "home/GF/WZ/lamp1/light/command";
-const char *pubTopicLight = "home/GF/WZ/lamp1/light/state";
-
-const int led1 = 5;      // D0
-const int buttonPin = 4; // D2
+// FastLED settings:
+#define NUM_STRIPS 3
+#define NUM_LEDS_PER_STRIP 60
+#define NUM_LEDS NUM_LEDS_PER_STRIP *NUM_STRIPS
+CRGB leds[NUM_STRIPS * NUM_LEDS_PER_STRIP];
 
 WiFiClient espClient;
-PubSubClient mqtt_client(espClient);
 EasyButton button(buttonPin);
 
-/* 
- * ###########################
- *  functions
- * ###########################
- */
-void setup_wifi()
+int nextColorProfile(int colorProfile)
 {
 
-  delay(10);
-  // We start by connecting to a WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.begin(ssid, password);
-
-  MDNS.begin(hostname);
-
-  while (WiFi.status() != WL_CONNECTED)
+  if (colorProfile < ledProfilesCount)
   {
-    delay(500);
-    Serial.print(".");
-  }
-
-  randomSeed(micros());
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void setup_ota()
-{
-
-  ArduinoOTA.setHostname(hostname);
-
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH)
-    {
-      type = "sketch";
-    }
-    else
-    { // U_SPIFFS
-      type = "filesystem";
-    }
-
-    // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-    Serial.println("Start updating " + type);
-  });
-
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR)
-    {
-      Serial.println("Auth Failed");
-    }
-    else if (error == OTA_BEGIN_ERROR)
-    {
-      Serial.println("Begin Failed");
-    }
-    else if (error == OTA_CONNECT_ERROR)
-    {
-      Serial.println("Connect Failed");
-    }
-    else if (error == OTA_RECEIVE_ERROR)
-    {
-      Serial.println("Receive Failed");
-    }
-    else if (error == OTA_END_ERROR)
-    {
-      Serial.println("End Failed");
-    }
-  });
-  ArduinoOTA.begin();
-}
-
-void mqtt_recv_callback(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (unsigned int i = 0; i < length; i++)
-  {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-
-  // Switch on the LED if an 1 was received as first character
-  if ((char)payload[0] == '1')
-  {
-    digitalWrite(led1, HIGH);
+    return colorProfile + 1;
   }
   else
   {
-    digitalWrite(led1, LOW);
-  }
-}
-
-void reconnect()
-{
-  // Loop until we're reconnected
-  while (!mqtt_client.connected())
-  {
-    Serial.print("Attempting MQTT connection...");
-    // Create a random client ID
-    String clientId = "ESP8266Client-";
-    clientId += String(random(0xffff), HEX);
-    // Attempt to connect
-    if (mqtt_client.connect(clientId.c_str()))
-    {
-      Serial.println("connected");
-      // ... and resubscribe
-      mqtt_client.subscribe(subTopicLight);
-    }
-    else
-    {
-      Serial.print("failed, rc=");
-      Serial.print(mqtt_client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
+    return 0;
   }
 }
 
 void button_long_pressed_callback()
 {
-  Serial.print("Button long pressed.");
-  delay(2000);
+  Serial.println("Button long pressed.");
 }
 
 void button_short_pressed_callback()
 {
-  Serial.print("Button short pressed.");
-  delay(2000);
+  Serial.println("Button short pressed.");
+  colorProfile = nextColorProfile(colorProfile);
 }
 
 void setup()
 {
-  // Pin config
-  pinMode(led1, OUTPUT);
   Serial.begin(115200);
 
-  // WIFI und OTA
-  setup_wifi();
-  setup_ota();
-
-  // mqtt
-  Serial.println("MQTT: Setting up ...");
-  mqtt_client.setServer(mqtt_server, mqtt_server_port);
-  mqtt_client.setCallback(mqtt_recv_callback);
-  Serial.println("MQTT: Setup done ...");
+  // WIFI and OTA
+  setup_wifi(ssid, password, hostname);
+  setup_ota(hostname);
 
   // Button handling
   Serial.println("Button: Setting up ...");
@@ -193,16 +64,22 @@ void setup()
   button.onPressed(button_short_pressed_callback);
   Serial.println("Button: Setup done ...");
 
+  // FastLED: stripe definition
+  Serial.println("FastLED: Setting up ...");
+  FastLED.addLeds<WS2812B, 6, GRB>(leds, 0, NUM_LEDS_PER_STRIP);
+  FastLED.addLeds<WS2812B, 7, GRB>(leds, NUM_LEDS_PER_STRIP, NUM_LEDS_PER_STRIP);
+  FastLED.addLeds<WS2812B, 8, GRB>(leds, 2 * NUM_LEDS_PER_STRIP, NUM_LEDS_PER_STRIP);
+  Serial.println("ButFastLEDton: Setup done ...");
+
   Serial.println("All setup steps are done.");
 }
 
 void loop()
 {
-  if (!mqtt_client.connected())
-  {
-    reconnect();
-  }
-  mqtt_client.loop();
   button.read();
-  ArduinoOTA.handle(); 
+  ArduinoOTA.handle();
+  if (colorProfile != -1)
+  {
+    LedProfiles[colorProfile]();
+  }
 }
