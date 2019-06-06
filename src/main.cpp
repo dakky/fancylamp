@@ -1,57 +1,71 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#include <config.h>
+#include <common.h>
 #include <EasyButton.h>
-#define FASTLED_INTERRUPT_RETRY_COUNT 1
+#define FASTLED_ESP8266_RAW_PIN_ORDER
+#define FASTLED_INTERRUPT_RETRY_COUNT 3
 #include <FastLED.h>
 #include <LedProfiles.h>
 #include <functionsOTA.h>
 #include <functionsWLAN.h>
-#include <config.h>
 
 // dynamic functioncalls
-// LedProfiles[]: List of used profiles
-// ledProfilesCount: c-style: arrays start at 0 => count -1
-typedef void (*profile)();
-profile LedProfiles[] = {simpleColor, testProfile2, testProfile3};
-int ledProfilesCount = 2;
-int colorProfile = 0;
+// SimplePatternList[]: List of used profiles
+typedef void (*SimplePatternList[])();
+SimplePatternList gPatterns = {simpleColor, rainbow, confetti, sinelon, bpm, juggle};
+#define ARRAY_SIZE(A) (sizeof(A) / sizeof((A)[0]))
 
-// FastLED settings:
-#define NUM_STRIPS 3
-#define NUM_LEDS_PER_STRIP 60
-#define NUM_LEDS NUM_LEDS_PER_STRIP *NUM_STRIPS
-CRGB leds[NUM_STRIPS * NUM_LEDS_PER_STRIP];
+// TODO: aus eeprom lesen, aktuell startet es immer mit dem ersten profil
+// Index number of which pattern is current
+int gCurrentPatternNumber = 0;
+int gHue = 0; // rotating "base color" used by many of the patterns
+
+// array of LED stripe
+CRGB leds[NUM_LEDS];
+
+bool poweredOn = true;
 
 WiFiClient espClient;
 EasyButton button(buttonPin);
 
-int nextColorProfile(int colorProfile)
+void nextPattern()
 {
-
-  if (colorProfile < ledProfilesCount)
-  {
-    return colorProfile + 1;
-  }
-  else
-  {
-    return 0;
-  }
+  // add one to the current pattern number, and wrap around at the end
+  gCurrentPatternNumber = (gCurrentPatternNumber + 1) % ARRAY_SIZE(gPatterns);
 }
 
 void button_long_pressed_callback()
 {
   Serial.println("Button long pressed.");
+  poweredOn = !poweredOn;
+
+  if (!poweredOn)
+  {
+    Serial.println("powered OFF");
+
+    // switch off all leds
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
+  }
 }
 
 void button_short_pressed_callback()
 {
-  Serial.println("Button short pressed.");
-  colorProfile = nextColorProfile(colorProfile);
+  Serial.println("Button short pressed: next profile ...");
+  nextPattern();
 }
 
 void setup()
 {
+  delay(3000); // 3 second delay for recovery
   Serial.begin(115200);
+
+  // FastLED: stripe definition
+  Serial.println("FastLED: Setting up ...");
+  FastLED.addLeds<WS2812B, dataPin, GRB>(leds, 0, NUM_LEDS);
+  FastLED.setBrightness(BRIGHTNESS);
+  Serial.println("FastLED: Setup done ...");
 
   // WIFI and OTA
   setup_wifi(ssid, password, hostname);
@@ -64,13 +78,6 @@ void setup()
   button.onPressed(button_short_pressed_callback);
   Serial.println("Button: Setup done ...");
 
-  // FastLED: stripe definition
-  Serial.println("FastLED: Setting up ...");
-  FastLED.addLeds<WS2812B, 6, GRB>(leds, 0, NUM_LEDS_PER_STRIP);
-  FastLED.addLeds<WS2812B, 7, GRB>(leds, NUM_LEDS_PER_STRIP, NUM_LEDS_PER_STRIP);
-  FastLED.addLeds<WS2812B, 8, GRB>(leds, 2 * NUM_LEDS_PER_STRIP, NUM_LEDS_PER_STRIP);
-  Serial.println("ButFastLEDton: Setup done ...");
-
   Serial.println("All setup steps are done.");
 }
 
@@ -78,8 +85,15 @@ void loop()
 {
   button.read();
   ArduinoOTA.handle();
-  if (colorProfile != -1)
+  if (poweredOn)
   {
-    LedProfiles[colorProfile]();
+    // Call the current pattern function once, updating the 'leds' array
+    gPatterns[gCurrentPatternNumber]();
+
+    FastLED.show();
+    // insert a delay to keep the framerate modest
+    FastLED.delay(1000 / FRAMES_PER_SECOND);
+
+    EVERY_N_MILLISECONDS(20) { gHue++; } // slowly cycle the "base color" through the rainbow
   }
 }
