@@ -25,6 +25,7 @@ int gHue = 0; // rotating "base color" used by many of the patterns
 CRGB leds[NUM_LEDS];
 
 bool poweredOn = true;
+bool menuMode = false;
 
 WiFiClient espClient;
 EasyButton button(buttonPin);
@@ -38,22 +39,50 @@ void nextPattern()
 void button_long_pressed_callback()
 {
   Serial.println("Button long pressed.");
-  poweredOn = !poweredOn;
-
-  if (!poweredOn)
+  if (menuMode)
   {
-    Serial.println("powered OFF");
+    // Menucontrolling
+    Serial.println("Menumode: saving and leaving menumode");
+    menuMode = false;
+    menuLed(false);
+  }
+  else
+  {
+    Serial.print("Powermode: ");
+    // this long press is meant for powering on/off
+    poweredOn = !poweredOn;
+    if (!poweredOn)
+    {
+      Serial.println("powering OFF");
 
-    // switch off all leds
-    fill_solid(leds, NUM_LEDS, CRGB::Black);
-    FastLED.show();
+      // switch off all leds
+      fill_solid(leds, NUM_LEDS, CRGB::Black);
+      FastLED.show();
+    }
   }
 }
 
 void button_short_pressed_callback()
 {
-  Serial.println("Button short pressed: next profile ...");
-  nextPattern();
+  if (menuMode)
+  {
+    Serial.println("Menumode: Doing something ...");
+  }
+  else
+  {
+    Serial.println("defaultmode: next profile ...");
+    nextPattern();
+  }
+}
+
+void button_menu_sequence_pressed_callback()
+{
+  if (!menuMode)
+  {
+    Serial.println("Entering menu ...");
+    menuMode = true;
+    menuLed(true);
+  }
 }
 
 void setup()
@@ -76,6 +105,7 @@ void setup()
   button.begin();
   button.onPressedFor(2000, button_long_pressed_callback);
   button.onPressed(button_short_pressed_callback);
+  button.onSequence(3, 2000, button_menu_sequence_pressed_callback);
   Serial.println("Button: Setup done ...");
 
   Serial.println("All setup steps are done.");
@@ -87,13 +117,19 @@ void loop()
   ArduinoOTA.handle();
   if (poweredOn)
   {
-    // Call the current pattern function once, updating the 'leds' array
-    gPatterns[gCurrentPatternNumber]();
+    if (menuMode)
+    {
+    }
+    else
+    {
+      // Call the current pattern function once, updating the 'leds' array
+      gPatterns[gCurrentPatternNumber]();
 
-    FastLED.show();
-    // insert a delay to keep the framerate modest
-    FastLED.delay(1000 / FRAMES_PER_SECOND);
+      FastLED.show();
+      // insert a delay to keep the framerate modest
+      FastLED.delay(1000 / FRAMES_PER_SECOND);
 
-    EVERY_N_MILLISECONDS(20) { gHue++; } // slowly cycle the "base color" through the rainbow
+      EVERY_N_MILLISECONDS(20) { gHue++; } // slowly cycle the "base color" through the rainbow
+    }
   }
 }
